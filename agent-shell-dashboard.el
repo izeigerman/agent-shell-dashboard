@@ -285,6 +285,12 @@ picker (e.g. one that starts a shell with the `prompt' strategy)."
        :box (:line-width (1 . -1) :color "#61677f")))
   "Badge face for finished, already-reviewed sessions.")
 
+(defface agent-shell-dashboard-badge-killed
+  '((t :foreground "#ff5d62" :background "#620f2a"
+       :box (:line-width (1 . -1) :color "#ff5d62") :weight bold))
+  "Badge face for killed sessions (dead process).
+Red, matching how `agent-shell-manager' colors its \"Killed\" status.")
+
 (defface agent-shell-dashboard-badge-wt
   '((t :foreground "#4ae2f0" :background "#004065"
        :box (:line-width (1 . -1) :color "#4ae2f0") :weight bold))
@@ -368,27 +374,64 @@ the reasoning level (omitted when unavailable).  Falls back to \"—\"."
   "Clear BUFFER's unseen flag."
   (remhash buffer agent-shell-dashboard--unseen))
 
+(defun agent-shell-dashboard--process-live-p (proc)
+  "Return non-nil when PROC is a live process in a runnable state.
+Mirrors the liveness test agent-shell-manager uses: the process must
+exist, be live, and be in a running/open status (not `exit'/`signal')."
+  (and proc
+       (processp proc)
+       (process-live-p proc)
+       (memq (process-status proc) '(run open listen connect stop))))
+
+(defun agent-shell-dashboard--killed-p (buffer)
+  "Return non-nil when BUFFER is a killed session (its process is dead).
+A killed session keeps its live buffer, so `agent-shell-status' still
+reports `ready' — the death is in the underlying process(es).  This
+mirrors agent-shell-manager's own \"killed\" detection using core state
+only (no manager dependency): the comint shell process, and — when the
+session has an ACP client — the client process in `agent-shell--state'."
+  (with-current-buffer buffer
+    (let* ((state (and (boundp 'agent-shell--state) agent-shell--state))
+           (comint-proc (get-buffer-process buffer))
+           (acp-proc (map-nested-elt state '(:client :process))))
+      (or
+       ;; The comint shell process is missing or dead.
+       (not (agent-shell-dashboard--process-live-p comint-proc))
+       ;; A client exists but its ACP process is missing or dead.
+       (and (map-elt state :client)
+            (not (agent-shell-dashboard--process-live-p acp-proc)))))))
+
 (defun agent-shell-dashboard--category (buffer)
   "Return a display category symbol for BUFFER.
 One of `waiting', `working', `done' (finished, unseen), `ready'
 \(finished, seen), `killed', or `other'."
-  (if (not (buffer-live-p buffer))
-      'killed
-    (pcase (ignore-errors (agent-shell-status :shell-buffer buffer))
-      ('busy 'working)
-      ('blocked 'waiting)
-      ('ready (if (agent-shell-dashboard--unseen-p buffer) 'done 'ready))
-      (_ 'other))))
+  (cond
+   ((not (buffer-live-p buffer)) 'killed)
+   ;; A killed session keeps a live buffer but a dead process, so this must
+   ;; run before `agent-shell-status' (which would still report `ready').
+   ((ignore-errors (agent-shell-dashboard--killed-p buffer)) 'killed)
+   (t (pcase (ignore-errors (agent-shell-status :shell-buffer buffer))
+        ('busy 'working)
+        ('blocked 'waiting)
+        ('ready (if (agent-shell-dashboard--unseen-p buffer) 'done 'ready))
+        (_ 'other)))))
 
 (defun agent-shell-dashboard--sorted-buffers (&optional buffers)
-  "Return BUFFERS (default all) sorted by recency only (newest first).
-Sorting by recency alone keeps rows stable as statuses change — a
-status flip no longer reorders the list the way a category sort did."
+  "Return BUFFERS (default all) newest-first, with killed sessions last.
+Killed sessions always sink below the live ones; within each group the
+order is recency alone.  Recency-within-group keeps rows stable as
+statuses change — a status flip (other than to/from killed) no longer
+reorders the list the way a full category sort did."
   (let ((bufs (or buffers (agent-shell-dashboard--buffers))))
     (sort (copy-sequence bufs)
           (lambda (a b)
-            (> (agent-shell-dashboard--activity-of a)
-               (agent-shell-dashboard--activity-of b))))))
+            (let ((ka (eq (agent-shell-dashboard--category a) 'killed))
+                  (kb (eq (agent-shell-dashboard--category b) 'killed)))
+              (if (eq ka kb)
+                  (> (agent-shell-dashboard--activity-of a)
+                     (agent-shell-dashboard--activity-of b))
+                ;; Different groups: the non-killed one sorts first.
+                (not ka)))))))
 
 ;;;; Last-message analysis (generic; mirrors my-ai.el, reimplemented here)
 
@@ -744,7 +787,7 @@ font; a leading and trailing space keep glyph and label off the border."
                  ('working '("◐" "Working" agent-shell-dashboard-badge-working))
                  ('waiting '("▲" "Waiting" agent-shell-dashboard-badge-waiting))
                  ('ready   '("✓" "Ready"   agent-shell-dashboard-badge-ready))
-                 ('killed  '("✗" "Killed"  agent-shell-dashboard-dim))
+                 ('killed  '("✗" "Killed"  agent-shell-dashboard-badge-killed))
                  (_        '("•" "…"       agent-shell-dashboard-dim))))
          ;; Monospace after the badge face: equal width, badge colors kept.
          (mono (if agent-shell-dashboard-badge-family
@@ -1580,6 +1623,9 @@ No-op unless a modus theme is active; registered on
        `(agent-shell-dashboard-badge-ready
          ((t :foreground ,green-faint
              :box (:line-width (1 . -1) :color ,border))))
+       `(agent-shell-dashboard-badge-killed
+         ((t :foreground ,red :background ,bg-red-subtle
+             :box (:line-width (1 . -1) :color ,red) :weight bold)))
        `(agent-shell-dashboard-badge-wt
          ((t :foreground ,cyan-cooler :background ,bg-cyan-subtle
              :box (:line-width (1 . -1) :color ,cyan-cooler) :weight bold))))))))
