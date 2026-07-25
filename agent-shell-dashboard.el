@@ -234,12 +234,15 @@ picker (e.g. one that starts a shell with the `prompt' strategy)."
 
 ;;;; Faces
 ;;
-;; Static defaults are tuned for a dark background; when a modus theme is
-;; active they are recolored from the live palette (see the theme layer at
-;; the bottom of this file), so light/dark toggling stays correct.
+;; Every colored face carries a light-background variant so the dashboard
+;; stays readable on the default Emacs theme (and any light theme); the
+;; `t' fallback is tuned for dark backgrounds.  When a modus theme is
+;; active the faces are instead recolored from the live palette (see the
+;; theme layer at the bottom of this file).
 
 (defface agent-shell-dashboard-banner
-  '((t :foreground "#79a8ff" :weight bold))
+  '((((background light)) :foreground "#3548cf" :weight bold)
+    (t :foreground "#79a8ff" :weight bold))
   "Face for the ASCII banner.")
 
 (defface agent-shell-dashboard-subtitle
@@ -247,27 +250,33 @@ picker (e.g. one that starts a shell with the `prompt' strategy)."
   "Face for the heartbeat/subtitle line.")
 
 (defface agent-shell-dashboard-attention
-  '((t :foreground "#ff7f86" :weight bold))
+  '((((background light)) :foreground "#a0132f" :weight bold)
+    (t :foreground "#ff7f86" :weight bold))
   "Face for the \"Needs you\" heading and decision hints (rust/red).")
 
 (defface agent-shell-dashboard-heading-sessions
-  '((t :foreground "#79a8ff" :weight bold))
+  '((((background light)) :foreground "#3548cf" :weight bold)
+    (t :foreground "#79a8ff" :weight bold))
   "Face for the Sessions heading (blue).")
 
 (defface agent-shell-dashboard-heading-actions
-  '((t :foreground "#4ae2f0" :weight bold))
+  '((((background light)) :foreground "#005e8b" :weight bold)
+    (t :foreground "#4ae2f0" :weight bold))
   "Face for the Quick actions heading (teal/cyan).")
 
 (defface agent-shell-dashboard-heading-projects
-  '((t :foreground "#fec43f" :weight bold))
+  '((((background light)) :foreground "#884900" :weight bold)
+    (t :foreground "#fec43f" :weight bold))
   "Face for the Recent sessions heading (amber/yellow).")
 
 (defface agent-shell-dashboard-key
-  '((t :foreground "#79a8ff" :weight bold))
+  '((((background light)) :foreground "#3548cf" :weight bold)
+    (t :foreground "#79a8ff" :weight bold))
   "Face for keybinding hints like [c].")
 
 (defface agent-shell-dashboard-model
-  '((t :foreground "#b6a0ff"))
+  '((((background light)) :foreground "#531ab6")
+    (t :foreground "#b6a0ff"))
   "Face for the model column (plum/magenta).")
 
 (defface agent-shell-dashboard-dim
@@ -279,33 +288,45 @@ picker (e.g. one that starts a shell with the `prompt' strategy)."
   "Face for the excerpt/quote sub-line.")
 
 (defface agent-shell-dashboard-badge-done
-  '((t :foreground "#00c06f" :background "#00422a"
+  '((((background light)) :foreground "#00663f" :background "#ccf0d8"
+     :box (:line-width (1 . -1) :color "#00663f") :weight bold)
+    (t :foreground "#00c06f" :background "#00422a"
        :box (:line-width (1 . -1) :color "#00c06f") :weight bold))
   "Badge face for finished, unreviewed sessions (green).")
 
 (defface agent-shell-dashboard-badge-working
-  '((t :foreground "#fec43f" :background "#4a4000"
+  '((((background light)) :foreground "#884900" :background "#f8e6b8"
+     :box (:line-width (1 . -1) :color "#884900") :weight bold)
+    (t :foreground "#fec43f" :background "#4a4000"
        :box (:line-width (1 . -1) :color "#fec43f") :weight bold))
   "Badge face for in-progress sessions (amber).")
 
 (defface agent-shell-dashboard-badge-waiting
-  '((t :foreground "#ff7f86" :background "#620f2a"
+  '((((background light)) :foreground "#a0132f" :background "#ffd4d8"
+     :box (:line-width (1 . -1) :color "#a0132f") :weight bold)
+    (t :foreground "#ff7f86" :background "#620f2a"
        :box (:line-width (1 . -1) :color "#ff7f86") :weight bold))
   "Badge face for sessions awaiting a permission decision (rust).")
 
 (defface agent-shell-dashboard-badge-ready
-  '((t :foreground "#88ca9f"
+  '((((background light)) :foreground "#2f7a52"
+     :box (:line-width (1 . -1) :color "#a8aeb8"))
+    (t :foreground "#88ca9f"
        :box (:line-width (1 . -1) :color "#61677f")))
   "Badge face for finished, already-reviewed sessions.")
 
 (defface agent-shell-dashboard-badge-killed
-  '((t :foreground "#ff5d62" :background "#620f2a"
+  '((((background light)) :foreground "#c00014" :background "#ffd4d8"
+     :box (:line-width (1 . -1) :color "#c00014") :weight bold)
+    (t :foreground "#ff5d62" :background "#620f2a"
        :box (:line-width (1 . -1) :color "#ff5d62") :weight bold))
   "Badge face for killed sessions (dead process).
 Red, matching how `agent-shell-manager' colors its \"Killed\" status.")
 
 (defface agent-shell-dashboard-badge-wt
-  '((t :foreground "#4ae2f0" :background "#004065"
+  '((((background light)) :foreground "#005e8b" :background "#c6e7f5"
+     :box (:line-width (1 . -1) :color "#005e8b") :weight bold)
+    (t :foreground "#4ae2f0" :background "#004065"
        :box (:line-width (1 . -1) :color "#4ae2f0") :weight bold))
   "Badge face for the worktree tag.")
 
@@ -1636,53 +1657,86 @@ Suitable as an `initial-buffer-choice'."
 
 ;;;; Theme layer — recolor faces from the live modus palette
 
+(defconst agent-shell-dashboard--faces
+  '(agent-shell-dashboard-banner
+    agent-shell-dashboard-subtitle
+    agent-shell-dashboard-attention
+    agent-shell-dashboard-heading-sessions
+    agent-shell-dashboard-heading-actions
+    agent-shell-dashboard-heading-projects
+    agent-shell-dashboard-key
+    agent-shell-dashboard-model
+    agent-shell-dashboard-dim
+    agent-shell-dashboard-quote
+    agent-shell-dashboard-badge-done
+    agent-shell-dashboard-badge-working
+    agent-shell-dashboard-badge-waiting
+    agent-shell-dashboard-badge-ready
+    agent-shell-dashboard-badge-killed
+    agent-shell-dashboard-badge-wt)
+  "All dashboard faces the theme layer may recolor.")
+
 (defun agent-shell-dashboard--modus-active-p ()
   "Return non-nil when a modus theme is currently enabled."
   (and (featurep 'modus-themes)
        (seq-some (lambda (th) (string-prefix-p "modus-" (symbol-name th)))
                  custom-enabled-themes)))
 
+(defun agent-shell-dashboard--reset-theme-faces ()
+  "Drop any modus recolor, restoring each face's own defface spec.
+The defface specs carry light and dark variants, so outside modus they
+are already correct on their own."
+  (dolist (face agent-shell-dashboard--faces)
+    (face-spec-set face nil)))
+
 (defun agent-shell-dashboard--apply-theme-faces (&rest _)
   "Recolor dashboard faces from the active modus palette.
-No-op unless a modus theme is active; registered on
-`enable-theme-functions' so it tracks the light/dark toggle."
+Outside modus, reset the faces to their defface specs (which include
+light-background variants).  Registered on `enable-theme-functions' and
+`disable-theme-functions' so it tracks any theme change.
+
+Uses `face-spec-set' override specs — unlike `custom-set-faces', these
+never touch the user's saved customizations and are fully cleared by
+the reset path."
   ;; Guarded: a half-loaded modus (stale daemon, or palette not yet realized
   ;; during load-theme) can leave palette names void; never abort the
   ;; enable-theme-functions hook and strand startup.
-  (when (agent-shell-dashboard--modus-active-p)
+  (if (not (agent-shell-dashboard--modus-active-p))
+      (agent-shell-dashboard--reset-theme-faces)
     (ignore-errors
-    (modus-themes-with-colors
-      (custom-set-faces
-       `(agent-shell-dashboard-banner ((t :foreground ,blue-warmer :weight bold)))
-       `(agent-shell-dashboard-subtitle ((t :foreground ,fg-dim)))
-       `(agent-shell-dashboard-attention ((t :foreground ,red-warmer :weight bold)))
-       `(agent-shell-dashboard-heading-sessions ((t :foreground ,blue-warmer :weight bold)))
-       `(agent-shell-dashboard-heading-actions ((t :foreground ,cyan-cooler :weight bold)))
-       `(agent-shell-dashboard-heading-projects ((t :foreground ,yellow-warmer :weight bold)))
-       `(agent-shell-dashboard-key ((t :foreground ,blue-warmer :weight bold)))
-       `(agent-shell-dashboard-model ((t :foreground ,magenta-cooler)))
-       `(agent-shell-dashboard-dim ((t :foreground ,fg-dim)))
-       `(agent-shell-dashboard-quote ((t :foreground ,fg-dim :slant italic)))
-       `(agent-shell-dashboard-badge-done
-         ((t :foreground ,green-cooler :background ,bg-green-subtle
-             :box (:line-width (1 . -1) :color ,green-cooler) :weight bold)))
-       `(agent-shell-dashboard-badge-working
-         ((t :foreground ,yellow-warmer :background ,bg-yellow-subtle
-             :box (:line-width (1 . -1) :color ,yellow-warmer) :weight bold)))
-       `(agent-shell-dashboard-badge-waiting
-         ((t :foreground ,red-warmer :background ,bg-red-subtle
-             :box (:line-width (1 . -1) :color ,red-warmer) :weight bold)))
-       `(agent-shell-dashboard-badge-ready
-         ((t :foreground ,green-faint
-             :box (:line-width (1 . -1) :color ,border))))
-       `(agent-shell-dashboard-badge-killed
-         ((t :foreground ,red :background ,bg-red-subtle
-             :box (:line-width (1 . -1) :color ,red) :weight bold)))
-       `(agent-shell-dashboard-badge-wt
-         ((t :foreground ,cyan-cooler :background ,bg-cyan-subtle
-             :box (:line-width (1 . -1) :color ,cyan-cooler) :weight bold))))))))
+      (modus-themes-with-colors
+        (dolist (fs `((agent-shell-dashboard-banner :foreground ,blue-warmer :weight bold)
+                      (agent-shell-dashboard-subtitle :foreground ,fg-dim)
+                      (agent-shell-dashboard-attention :foreground ,red-warmer :weight bold)
+                      (agent-shell-dashboard-heading-sessions :foreground ,blue-warmer :weight bold)
+                      (agent-shell-dashboard-heading-actions :foreground ,cyan-cooler :weight bold)
+                      (agent-shell-dashboard-heading-projects :foreground ,yellow-warmer :weight bold)
+                      (agent-shell-dashboard-key :foreground ,blue-warmer :weight bold)
+                      (agent-shell-dashboard-model :foreground ,magenta-cooler)
+                      (agent-shell-dashboard-dim :foreground ,fg-dim)
+                      (agent-shell-dashboard-quote :foreground ,fg-dim :slant italic)
+                      (agent-shell-dashboard-badge-done
+                       :foreground ,green-cooler :background ,bg-green-subtle
+                       :box (:line-width (1 . -1) :color ,green-cooler) :weight bold)
+                      (agent-shell-dashboard-badge-working
+                       :foreground ,yellow-warmer :background ,bg-yellow-subtle
+                       :box (:line-width (1 . -1) :color ,yellow-warmer) :weight bold)
+                      (agent-shell-dashboard-badge-waiting
+                       :foreground ,red-warmer :background ,bg-red-subtle
+                       :box (:line-width (1 . -1) :color ,red-warmer) :weight bold)
+                      (agent-shell-dashboard-badge-ready
+                       :foreground ,green-faint
+                       :box (:line-width (1 . -1) :color ,border))
+                      (agent-shell-dashboard-badge-killed
+                       :foreground ,red :background ,bg-red-subtle
+                       :box (:line-width (1 . -1) :color ,red) :weight bold)
+                      (agent-shell-dashboard-badge-wt
+                       :foreground ,cyan-cooler :background ,bg-cyan-subtle
+                       :box (:line-width (1 . -1) :color ,cyan-cooler) :weight bold)))
+          (face-spec-set (car fs) `((t ,@(cdr fs)))))))))
 
 (add-hook 'enable-theme-functions #'agent-shell-dashboard--apply-theme-faces)
+(add-hook 'disable-theme-functions #'agent-shell-dashboard--apply-theme-faces)
 (agent-shell-dashboard--apply-theme-faces)
 
 (provide 'agent-shell-dashboard)
