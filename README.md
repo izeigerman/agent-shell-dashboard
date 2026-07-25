@@ -98,6 +98,12 @@ Then `doom sync` and restart. Bind it if you like: `(map! :leader "d" #'agent-sh
 Every action delegates to a configurable `agent-shell-dashboard-*-function`, so
 you can wire keys to your own commands without editing the package.
 
+Move between session rows with `TAB` / `S-TAB`; the current row — the target of
+every "at point" action — is highlighted via `hl-line-mode`, with a slim `hbar`
+cursor marking exact point. Customize `agent-shell-dashboard-cursor-type`
+(any `cursor-type` value, or `nil` to hide the cursor and rely on the row
+highlight alone).
+
 ## Dependencies
 
 Only hard dependency: **`agent-shell`**. Optional, auto-detected: `modus-themes`

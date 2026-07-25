@@ -147,6 +147,19 @@ Called with one argument: the session plist (see
   "Column width for the working-directory path in the Sessions table."
   :type 'integer)
 
+(defcustom agent-shell-dashboard-cursor-type 'hbar
+  "`cursor-type' used in the dashboard buffer.
+The current row is always shown by `hl-line-mode'; this controls whether
+a cursor is drawn on top of it as well.  Use nil to hide the cursor
+entirely, or any valid `cursor-type' value (t, `box', `bar', `hbar',
+...) to keep it visible."
+  :type '(choice (const :tag "No cursor" nil)
+                 (const :tag "Frame default" t)
+                 (const :tag "Box" box)
+                 (const :tag "Bar" bar)
+                 (const :tag "Horizontal bar" hbar)
+                 (sexp :tag "Other cursor-type value")))
+
 (defcustom agent-shell-dashboard-badge-family nil
   "Monospace font family for status badges, or nil to use `fixed-pitch'.
 Badges are padded to a fixed character width, which only yields equal
@@ -1102,6 +1115,10 @@ place, so a literal would accumulate across every call and refresh."
              (alist-get 'waiting counts 0)
              (alist-get 'ready counts 0))
      'face 'agent-shell-dashboard-dim)
+    (insert "\n")
+    (agent-shell-dashboard--insert
+     "  TAB / S-TAB next / prev row · RET open · ? help"
+     'face 'agent-shell-dashboard-dim)
     (insert "\n")))
 
 (defun agent-shell-dashboard--render ()
@@ -1184,7 +1201,12 @@ re-sorting), falling back to the previous line number."
         (dolist (ws win-snaps)
           (set-window-point (car ws)
                             (agent-shell-dashboard--restore-point (cdr ws))))
-        (goto-char (agent-shell-dashboard--restore-point buf-snap))))))
+        (goto-char (agent-shell-dashboard--restore-point buf-snap))
+        ;; Timer-driven refreshes run outside the command loop, where
+        ;; `erase-buffer' strands the hl-line overlay and no post-command
+        ;; hook fires to fix it — re-highlight explicitly.
+        (when (bound-and-true-p hl-line-mode)
+          (hl-line-highlight))))))
 
 (defun agent-shell-dashboard--maybe-refresh ()
   "Refresh the dashboard only when it is displayed in some window."
@@ -1552,8 +1574,11 @@ live buffer.  Refreshes afterwards so the reopened session appears."
 (define-derived-mode agent-shell-dashboard-mode special-mode "Agent-Dashboard"
   "Major mode for the agent-shell landing page."
   (setq-local truncate-lines t
-              cursor-type nil
+              cursor-type agent-shell-dashboard-cursor-type
               buffer-read-only t)
+  ;; "At point" actions target whole rows, so the row cue is a full-line
+  ;; highlight; the cursor (customizable, discreet hbar) marks exact point.
+  (hl-line-mode 1)
   (setq-local revert-buffer-function
               (lambda (&rest _) (agent-shell-dashboard-refresh))))
 
@@ -1600,14 +1625,14 @@ Suitable as an `initial-buffer-choice'."
         (agent-shell-dashboard-refresh)
       (with-current-buffer buf
         (let ((inhibit-read-only t))
-          (agent-shell-dashboard--render))))
+          (agent-shell-dashboard--render))
+        ;; Land on the first session row so the row highlight starts
+        ;; somewhere useful rather than on the banner.
+        (agent-shell-dashboard--goto-first-row)))
     (agent-shell-dashboard--ensure-idle-timer)
-    (if (called-interactively-p 'interactive)
-        (progn (pop-to-buffer-same-window buf)
-               (unless existing
-                 (with-current-buffer buf (agent-shell-dashboard--goto-first-row)))
-               buf)
-      buf)))
+    (when (called-interactively-p 'interactive)
+      (pop-to-buffer-same-window buf))
+    buf))
 
 ;;;; Theme layer — recolor faces from the live modus palette
 
