@@ -1142,20 +1142,49 @@ raw line number."
           (forward-line 1)))
       found)))
 
+(defun agent-shell-dashboard--point-snapshot (pos)
+  "Return a restore snapshot for buffer position POS.
+Records the session row there (by buffer identity, which survives
+re-sorting) and its line number as a fallback."
+  (list :target (get-text-property (min pos (point-max))
+                                   'agent-shell-dashboard-buffer)
+        :line (line-number-at-pos pos)))
+
+(defun agent-shell-dashboard--restore-point (snapshot)
+  "Move point to SNAPSHOT's row (by identity) or its line, and return point."
+  (or (when-let* ((target (plist-get snapshot :target)))
+        (agent-shell-dashboard--goto-buffer-row target))
+      (progn (goto-char (point-min))
+             (forward-line (1- (plist-get snapshot :line)))
+             (point))))
+
 (defun agent-shell-dashboard-refresh ()
   "Rebuild the dashboard, keeping point on the same session when possible.
-Prefers restoring to the session row at point by identity (survives
-re-sorting); falls back to the previous line number otherwise."
+Point is preserved per *window*, not just for the buffer: `erase-buffer'
+during a re-render resets the window-point of every window showing the
+dashboard back to the top, so we snapshot each window's row before
+rendering and restore it with `set-window-point' after.  Without this, a
+background refresh — e.g. while another session streams output — bounces
+your cursor to line 1 the moment you switch back to the dashboard.
+Restoration prefers the session row at point by identity (survives
+re-sorting), falling back to the previous line number."
   (interactive)
   (when-let* ((buf (agent-shell-dashboard--get-buffer)))
     (with-current-buffer buf
-      (let ((inhibit-read-only t)
-            (line (line-number-at-pos))
-            (target (agent-shell-dashboard--buffer-at-point)))
+      (let* ((inhibit-read-only t)
+             (windows (get-buffer-window-list buf nil 'visible))
+             (buf-snap (agent-shell-dashboard--point-snapshot (point)))
+             (win-snaps (mapcar (lambda (w)
+                                  (cons w (agent-shell-dashboard--point-snapshot
+                                           (window-point w))))
+                                windows)))
         (agent-shell-dashboard--render)
-        (unless (and target (agent-shell-dashboard--goto-buffer-row target))
-          (goto-char (point-min))
-          (forward-line (1- line)))))))
+        ;; Restore each window's point independently, then the buffer's own
+        ;; point last (covers the no-window case and the selected window).
+        (dolist (ws win-snaps)
+          (set-window-point (car ws)
+                            (agent-shell-dashboard--restore-point (cdr ws))))
+        (goto-char (agent-shell-dashboard--restore-point buf-snap))))))
 
 (defun agent-shell-dashboard--maybe-refresh ()
   "Refresh the dashboard only when it is displayed in some window."
