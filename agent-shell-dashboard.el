@@ -784,7 +784,7 @@ font; a leading and trailing space keep glyph and label off the border."
   ;; badges different sizes.  These are uniform.
   (let* ((spec (pcase category
                  ('done    '("●" "Done"    agent-shell-dashboard-badge-done))
-                 ('working '("◐" "Working" agent-shell-dashboard-badge-working))
+                 ('working '("◆" "Busy"    agent-shell-dashboard-badge-working))
                  ('waiting '("▲" "Waiting" agent-shell-dashboard-badge-waiting))
                  ('ready   '("✓" "Ready"   agent-shell-dashboard-badge-ready))
                  ('killed  '("✗" "Killed"  agent-shell-dashboard-badge-killed))
@@ -793,10 +793,8 @@ font; a leading and trailing space keep glyph and label off the border."
          (mono (if agent-shell-dashboard-badge-family
                    (list :family agent-shell-dashboard-badge-family)
                  'fixed-pitch))
-         ;; "Working" reads a touch larger than the rest; nudge only it down.
-         (extra (when (eq category 'working) '((:height 0.95))))
          (base (propertize (format " %s %-8s" (nth 0 spec) (nth 1 spec))
-                           'face (append (list (nth 2 spec) mono) extra))))
+                           'face (list (nth 2 spec) mono))))
     (if worktree
         (concat (propertize "[WT]" 'face (list 'agent-shell-dashboard-badge-wt mono))
                 " " base)
@@ -1098,7 +1096,7 @@ place, so a literal would accumulate across every call and refresh."
   (let ((counts (agent-shell-dashboard--counts buffers)))
     (insert "\n")
     (agent-shell-dashboard--insert
-     (format "  ● %d done · ◐ %d working · ▲ %d waiting · ✓ %d ready"
+     (format "  ● %d done · ◆ %d busy · ▲ %d waiting · ✓ %d ready"
              (alist-get 'done counts 0)
              (alist-get 'working counts 0)
              (alist-get 'waiting counts 0)
