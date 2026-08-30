@@ -12,12 +12,36 @@ of doom-dashboard.
 - **Needs you** — the triage queue: sessions awaiting a permission decision or
   finished-but-unreviewed, each with a **one-line summary of the agent's last
   reply** (see below) and a hint when it looks like it's asking you something.
-- **Sessions** — every live session with a status badge (`● Done`, `⏳ Working`,
-  `⚠ Waiting`, `✓ Ready`, `[WT]` worktree), directory, model, and last activity.
+- **Sessions** — every live session with a status badge (`● Done`, `◆ Busy`,
+  `▲ Waiting`, `✓ Ready`, `✗ Killed`), model, and last activity.
 - **Quick actions** — the keybinding menu.
 - **Recent sessions** — the latest _previous_ (closed) sessions, read from
   agent-shell transcripts under recent projects. `RET` reopens one. Max
   `agent-shell-dashboard-recent-sessions-count` (default 4).
+
+## The session tree
+
+Every session list is grouped **base repo → worktree → session**, so a session
+row never repeats its working directory — the nodes above it carry that:
+
+```
+ ▾ agent-shell-dashboard                  ~/github/agent-shell-dashboard
+   ├─ [WT] feat/tree  (tree-work)         ~/worktrees/tree-work
+   │    ◆ Busy    tree rework             Opus 5 [31k/200k] high     now
+   └─ main
+        ✓ Ready   dashboard               Opus 5 [12k/200k]          4m ago
+```
+
+Linked worktrees are tagged `[WT]` and labelled by the branch they have checked
+out (with the directory name alongside when it differs). Worktree nodes are
+rows too: `TAB` stops on them, `RET` opens their most recent session.
+
+**`D` deletes the worktree at point** — from the worktree node or from any
+session row inside it. It kills every agent-shell session in the worktree
+first, then runs `git worktree remove --force`, so uncommitted changes go with
+it. Main worktrees are refused; the checked-out branch is left alone. Swap in
+your own checks (pushing the branch first, say) via
+`agent-shell-dashboard-delete-worktree-function`.
 
 ## The last-reply summarizer
 
@@ -92,13 +116,13 @@ Then `doom sync` and restart. Bind it if you like: `(map! :leader "d" #'agent-sh
 | `c` | New session | `m` | Set model at point |
 | `w` | New worktree session | `r` | Rename session at point |
 | `a` | Conclusions report (async) | `K` | Kill session at point |
-| `g` | Refresh | `X` | Close all |
-| `q` / `?` | Quit / Help | | |
+| `g` | Refresh | `D` | Delete worktree at point |
+| `q` / `?` | Quit / Help | `X` | Close all |
 
 Every action delegates to a configurable `agent-shell-dashboard-*-function`, so
 you can wire keys to your own commands without editing the package.
 
-Move between session rows with `TAB` / `S-TAB`; the current row — the target of
+Move between rows with `TAB` / `S-TAB`; the current row — the target of
 every "at point" action — is highlighted via `hl-line-mode`, with a slim `hbar`
 cursor marking exact point. Customize `agent-shell-dashboard-cursor-type`
 (any `cursor-type` value, or `nil` to hide the cursor and rely on the row
