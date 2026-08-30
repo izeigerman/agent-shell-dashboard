@@ -3,8 +3,7 @@
 ;; Copyright (C) 2026 Wanderson Ferreira
 ;; Copyright (C) 2026 Iaroslav Zeigerman
 
-;; Author: Wanderson Ferreira
-;; Author: Iaroslav Zeigerman
+;; Author: Wanderson Ferreira, Iaroslav Zeigerman
 ;; Maintainer: Iaroslav Zeigerman
 ;; URL: https://github.com/izeigerman/agent-shell-dashboard
 ;; Version: 0.1.0
