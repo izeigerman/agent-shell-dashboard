@@ -1,10 +1,11 @@
 ;;; agent-shell-dashboard.el --- A landing page for agent-shell -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Wanderson Ferreira
+;; Copyright (C) 2026 Iaroslav Zeigerman
 
-;; Author: Wanderson Ferreira
-;; Maintainer: Wanderson Ferreira
-;; URL: https://github.com/wandersoncferreira/agent-shell-dashboard
+;; Author: Wanderson Ferreira, Iaroslav Zeigerman
+;; Maintainer: Iaroslav Zeigerman
+;; URL: https://github.com/izeigerman/agent-shell-dashboard
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "28.1") (agent-shell "0.1"))
 ;; Keywords: convenience, tools
@@ -23,11 +24,16 @@
 ;;   - "Needs you": the triage queue (permission requests + finished-but-
 ;;     unreviewed sessions, with a one-line excerpt of the last message)
 ;;   - "Sessions": every live agent-shell buffer with a status badge,
-;;     working directory, model and relative activity time
+;;     model and relative activity time
 ;;   - "Quick actions": a keybinding menu
 ;;   - "Recent sessions": the latest previous (closed) agent-shell sessions,
 ;;     discovered from transcript files; RET on one resumes it
 ;;   - a stats footer line
+;;
+;; Both session tables are grouped into a <base repo> -> <worktree> ->
+;; <session> tree, so a session row never repeats its working directory —
+;; the repo and worktree nodes above it carry that.  `D' on any row deletes
+;; that row's git worktree, killing every session inside it first.
 ;;
 ;; All state is read from `agent-shell' *core* only (`agent-shell-buffers',
 ;; `agent-shell-status', `agent-shell-get-model-name', the buffer's
@@ -144,7 +150,7 @@ Called with one argument: the session plist (see
   :type 'integer)
 
 (defcustom agent-shell-dashboard-path-width 30
-  "Column width for the working-directory path in the Sessions table."
+  "Column width for the repository/worktree paths shown in the session tree."
   :type 'integer)
 
 (defcustom agent-shell-dashboard-cursor-type 'hbar
@@ -230,6 +236,17 @@ No session row is required — this reopens a session that has no live
 buffer.  Defaults to core `agent-shell-resume-session', which prompts
 for a session id; override with a command that presents a session
 picker (e.g. one that starts a shell with the `prompt' strategy)."
+  :type '(choice function (const :tag "Unconfigured" nil)))
+
+(defcustom agent-shell-dashboard-delete-worktree-function
+  #'agent-shell-dashboard--delete-worktree-default
+  "Function invoked by `D' to delete the worktree of the row at point.
+Called with one argument: a worktree plist with `:dir' (the worktree
+root), `:repo' (the main repository root), `:linked' (non-nil for a
+linked worktree) and `:branch'.  The default confirms, kills every
+agent-shell session inside the worktree and runs `git worktree remove
+--force'.  Override to wrap it in your own checks (e.g. pushing the
+branch first)."
   :type '(choice function (const :tag "Unconfigured" nil)))
 
 ;;;; Faces
@@ -329,6 +346,15 @@ Red, matching how `agent-shell-manager' colors its \"Killed\" status.")
     (t :foreground "#4ae2f0" :background "#004065"
        :box (:line-width (1 . -1) :color "#4ae2f0") :weight bold))
   "Badge face for the worktree tag.")
+
+(defface agent-shell-dashboard-repo
+  '((t :inherit default :weight bold))
+  "Face for a base-repository node in the session tree.")
+
+(defface agent-shell-dashboard-worktree
+  '((((background light)) :foreground "#005e8b")
+    (t :foreground "#4ae2f0"))
+  "Face for a worktree node in the session tree (teal/cyan).")
 
 ;;;; Data layer — read agent-shell state
 ;;
@@ -738,12 +764,130 @@ message when the summarizer program is unavailable."
                  (erase-buffer)
                  (insert "Failed to start the summarizer process.\n")))))))))))
 
-;;;; Worktree awareness (generic; mirrors my-ai.el)
+;;;; Repository / worktree resolution
+;;
+;; Sessions are grouped <base repo> -> <worktree> -> <session>, so every
+;; session directory must be resolved to the worktree holding it and to that
+;; worktree's *main* repository.  This reads git's own on-disk layout rather
+;; than shelling out, which keeps it cheap enough to run on every refresh:
+;;
+;;   - main worktree:   <root>/.git is a directory
+;;   - linked worktree: <root>/.git is a file "gitdir: <common>/worktrees/<id>",
+;;                      and <gitdir>/commondir points back at the main .git
+;;
+;; A directory outside any repository becomes its own repo and worktree, so
+;; the tree has the same shape everywhere.
 
-(defun agent-shell-dashboard--linked-worktree-p (dir)
-  "Return non-nil if DIR is a linked git worktree (not the main tree)."
-  (let ((dotgit (expand-file-name ".git" dir)))
-    (and (file-exists-p dotgit) (file-regular-p dotgit))))
+(defun agent-shell-dashboard--dir-name (dir)
+  "Return DIR's last path component, falling back to DIR itself."
+  (let ((name (file-name-nondirectory (directory-file-name dir))))
+    (if (string-empty-p name) (abbreviate-file-name dir) name)))
+
+(defun agent-shell-dashboard--gitdir (root)
+  "Return the git directory of the worktree rooted at ROOT, or nil.
+For a linked worktree ROOT/.git is a file pointing at the real gitdir."
+  (let ((dotgit (expand-file-name ".git" root)))
+    (cond
+     ((file-directory-p dotgit) (file-name-as-directory dotgit))
+     ((file-regular-p dotgit)
+      (with-temp-buffer
+        (insert-file-contents dotgit nil 0 4096)
+        (goto-char (point-min))
+        (when (re-search-forward "^gitdir: *\\(.+\\)$" nil t)
+          (file-name-as-directory
+           (expand-file-name (string-trim (match-string 1)) root))))))))
+
+(defun agent-shell-dashboard--main-root (gitdir)
+  "Return the main repository root for linked-worktree GITDIR, or nil.
+A linked worktree's gitdir holds a `commondir' file pointing at the main
+`.git' directory; the repository root is that directory's parent."
+  (let ((commondir (expand-file-name "commondir" gitdir)))
+    (when (file-readable-p commondir)
+      (with-temp-buffer
+        (insert-file-contents commondir nil 0 4096)
+        (let ((common (string-trim (buffer-string))))
+          (unless (string-empty-p common)
+            (file-name-directory
+             (directory-file-name (expand-file-name common gitdir)))))))))
+
+(defun agent-shell-dashboard--branch (gitdir)
+  "Return the branch checked out in GITDIR, or nil when detached or unknown."
+  (let ((head (expand-file-name "HEAD" gitdir)))
+    (when (file-readable-p head)
+      (with-temp-buffer
+        (insert-file-contents head nil 0 512)
+        (goto-char (point-min))
+        (when (re-search-forward "^ref: *refs/heads/\\(.+\\)$" nil t)
+          (string-trim (match-string 1)))))))
+
+(defun agent-shell-dashboard--repo-info (dir)
+  "Return a plist describing the worktree and repository containing DIR.
+Keys: `:worktree' (the worktree root), `:repo' (the main repository
+root), `:linked' (non-nil when the worktree is a linked one) and
+`:branch'.  DIR stands in for both roots when it is not inside a git
+repository — or no longer exists, as with a resumable session whose
+worktree was deleted — so every session still yields a tree node.
+
+Both roots are returned as true names.  Git records a linked worktree's
+main `.git' by its resolved path, so without that a symlinked prefix
+\(`/var' vs `/private/var' on macOS, or a symlinked home) would split one
+repository into two tree nodes."
+  (let* ((dir (file-name-as-directory (expand-file-name (or dir default-directory))))
+         (root (and (file-directory-p dir)
+                    (ignore-errors (locate-dominating-file dir ".git"))))
+         (root (and root (file-name-as-directory (file-truename root))))
+         (gitdir (and root (agent-shell-dashboard--gitdir root))))
+    (if (null gitdir)
+        (let ((dir (file-name-as-directory (file-truename dir))))
+          (list :worktree dir :repo dir :linked nil :branch nil))
+      (let* ((linked (not (file-directory-p (expand-file-name ".git" root))))
+             ;; A `.git' file with no `commondir' is not a worktree (a
+             ;; submodule, say): treat it as a standalone repository.
+             (main (and linked (agent-shell-dashboard--main-root gitdir))))
+        (list :worktree root
+              :repo (if main (file-name-as-directory (file-truename main)) root)
+              :linked (and linked main t)
+              :branch (agent-shell-dashboard--branch gitdir))))))
+
+(defun agent-shell-dashboard--worktree-plist (dir)
+  "Return the worktree node plist (`:dir' `:repo' `:linked' `:branch') for DIR."
+  (let ((info (agent-shell-dashboard--repo-info dir)))
+    (list :dir (plist-get info :worktree)
+          :repo (plist-get info :repo)
+          :linked (plist-get info :linked)
+          :branch (plist-get info :branch))))
+
+(defun agent-shell-dashboard--buffers-under (dir)
+  "Return the live agent-shell buffers whose working directory is inside DIR."
+  (seq-filter (lambda (b)
+                (ignore-errors
+                  (file-in-directory-p (agent-shell-dashboard--cwd b) dir)))
+              (agent-shell-dashboard--buffers)))
+
+(defun agent-shell-dashboard--group-tree (items dir-fn)
+  "Group ITEMS into a repo -> worktree -> items tree, preserving their order.
+DIR-FN returns an item's working directory.  Returns a list of
+\(REPO-ROOT . ((WORKTREE-ROOT . ITEMS) ...)) — repos and worktrees
+ordered by first appearance, so the caller's sort still drives the
+layout."
+  (let ((repos '()))
+    (dolist (item items)
+      (let* ((info (agent-shell-dashboard--repo-info (funcall dir-fn item)))
+             (repo (plist-get info :repo))
+             (worktree (plist-get info :worktree))
+             (rcell (or (assoc repo repos)
+                        (car (push (list repo) repos))))
+             (wcell (or (assoc worktree (cdr rcell))
+                        (let ((cell (list worktree)))
+                          (setcdr rcell (cons cell (cdr rcell)))
+                          cell))))
+        (setcdr wcell (cons item (cdr wcell)))))
+    (mapcar (lambda (rcell)
+              (cons (car rcell)
+                    (mapcar (lambda (wcell)
+                              (cons (car wcell) (nreverse (cdr wcell))))
+                            (nreverse (cdr rcell)))))
+            (nreverse repos))))
 
 ;;;; Formatting helpers
 
@@ -798,17 +942,23 @@ message when the summarizer program is unavailable."
 ;; with `:align-to' stretch spaces so every column starts at the same x on
 ;; every row — independent of the badge glyph/label widths and of the
 ;; proportional prose font.  This is what keeps the table from jittering.
-(defconst agent-shell-dashboard--col-name 18 "Column where the name field starts.")
-(defconst agent-shell-dashboard--col-path 38 "Column where the path field starts.")
-(defconst agent-shell-dashboard--col-model 70 "Column where the model field starts.")
-(defconst agent-shell-dashboard--col-time 100 "Column where the time field starts.")
+(defconst agent-shell-dashboard--col-name 22 "Column where the name field starts.")
+(defconst agent-shell-dashboard--col-model 50 "Column where the model field starts.")
+(defconst agent-shell-dashboard--col-time 84 "Column where the time field starts.")
 
 (defun agent-shell-dashboard--align-to (col)
   "Return a space whose display stretches point to COL (char units)."
   (propertize " " 'display `(space :align-to ,col)))
 
-(defun agent-shell-dashboard--badge (category worktree)
-  "Return a propertized status badge for CATEGORY (WORKTREE tag optional).
+(defun agent-shell-dashboard--mono ()
+  "Return the face spec that forces badges into a monospace family.
+`agent-shell-dashboard-badge-family' when set, else `fixed-pitch'."
+  (if agent-shell-dashboard-badge-family
+      (list :family agent-shell-dashboard-badge-family)
+    'fixed-pitch))
+
+(defun agent-shell-dashboard--badge (category)
+  "Return a propertized status badge for CATEGORY.
 Rendered in a monospace family (`agent-shell-dashboard-badge-family',
 falling back to the `fixed-pitch' face) and padded to a fixed character
 width, so every badge is exactly the same size under a proportional prose
@@ -824,26 +974,17 @@ font; a leading and trailing space keep glyph and label off the border."
                  ('killed  '("✗" "Killed"  agent-shell-dashboard-badge-killed))
                  (_        '("•" "…"       agent-shell-dashboard-dim))))
          ;; Monospace after the badge face: equal width, badge colors kept.
-         (mono (if agent-shell-dashboard-badge-family
-                   (list :family agent-shell-dashboard-badge-family)
-                 'fixed-pitch))
-         (base (propertize (format " %s %-8s" (nth 0 spec) (nth 1 spec))
-                           'face (list (nth 2 spec) mono))))
-    (if worktree
-        (concat (propertize "[WT]" 'face (list 'agent-shell-dashboard-badge-wt mono))
-                " " base)
-      base)))
+         (mono (agent-shell-dashboard--mono)))
+    (propertize (format " %s %-8s" (nth 0 spec) (nth 1 spec))
+                'face (list (nth 2 spec) mono))))
 
-(defun agent-shell-dashboard--insert-session-row (buffer)
-  "Insert one Sessions/Needs-you row for BUFFER, propertized for navigation."
+(defun agent-shell-dashboard--insert-session-row (buffer prefix)
+  "Insert one session row for BUFFER behind the tree PREFIX.
+The working directory is not repeated here: the repo and worktree nodes
+above the row carry it."
   (let* ((cat (agent-shell-dashboard--category buffer))
-         (wt (agent-shell-dashboard--linked-worktree-p
-              (agent-shell-dashboard--cwd buffer)))
-         (badge (agent-shell-dashboard--badge cat wt))
+         (badge (agent-shell-dashboard--badge cat))
          (name (agent-shell-dashboard--clean-name buffer))
-         (path (agent-shell-dashboard--truncate-left
-                (abbreviate-file-name (agent-shell-dashboard--cwd buffer))
-                agent-shell-dashboard-path-width))
          (model (agent-shell-dashboard--model buffer))
          (time (agent-shell-dashboard--relative-time
                 (agent-shell-dashboard--activity-of buffer)))
@@ -851,13 +992,12 @@ font; a leading and trailing space keep glyph and label off the border."
     ;; Columns are pinned with `:align-to' so nothing shifts when badge
     ;; widths differ.  Fields are truncated (not space-padded) since the
     ;; stretch spaces provide the gaps.
-    (insert "  " badge)
+    (agent-shell-dashboard--insert prefix 'face 'agent-shell-dashboard-dim)
+    (insert badge)
     (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-name))
-    (agent-shell-dashboard--insert (agent-shell-dashboard--fit name 18) 'face 'default)
-    (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-path))
-    (agent-shell-dashboard--insert path 'face 'agent-shell-dashboard-dim)
+    (agent-shell-dashboard--insert (agent-shell-dashboard--fit name 26) 'face 'default)
     (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-model))
-    (agent-shell-dashboard--insert (agent-shell-dashboard--fit model 28)
+    (agent-shell-dashboard--insert (agent-shell-dashboard--fit model 30)
                                    'face 'agent-shell-dashboard-model)
     (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-time))
     (agent-shell-dashboard--insert time 'face 'agent-shell-dashboard-dim)
@@ -867,6 +1007,108 @@ font; a leading and trailing space keep glyph and label off the border."
     ;; would merge adjacent rows into one text-property run).
     (add-text-properties start (point)
                          (list 'agent-shell-dashboard-buffer buffer))))
+
+;; Tree chrome.  A worktree node opens with a branch/last-branch glyph; its
+;; rows are indented one step further, carrying a stem only while more
+;; worktrees follow in the same repo.
+(defconst agent-shell-dashboard--tree-branch "   ├─ " "Prefix of a non-final worktree node.")
+(defconst agent-shell-dashboard--tree-last "   └─ " "Prefix of the final worktree node.")
+(defconst agent-shell-dashboard--tree-stem "   │   " "Row prefix under a non-final worktree.")
+(defconst agent-shell-dashboard--tree-blank "       " "Row prefix under the final worktree.")
+
+(defun agent-shell-dashboard--insert-repo-node (repo)
+  "Insert the base-repository node row for REPO's root directory."
+  (agent-shell-dashboard--insert " ▾ " 'face 'agent-shell-dashboard-dim)
+  (agent-shell-dashboard--insert (agent-shell-dashboard--dir-name repo)
+                                 'face 'agent-shell-dashboard-repo)
+  (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-model))
+  (agent-shell-dashboard--insert
+   (agent-shell-dashboard--truncate-left
+    (abbreviate-file-name (directory-file-name repo))
+    agent-shell-dashboard-path-width)
+   'face 'agent-shell-dashboard-dim)
+  (insert "\n"))
+
+(defun agent-shell-dashboard--insert-worktree-node (dir repo last)
+  "Insert the worktree node row for DIR under REPO.
+LAST is non-nil when DIR is the final worktree of its repo, which
+selects the closing tree glyph.  The node is labelled by the branch it
+has checked out — the directory name only adds to that when the two
+differ, and for a main worktree it just repeats the repo name — and
+carries its worktree plist so `D' can delete it from here."
+  (let* ((worktree (agent-shell-dashboard--worktree-plist dir))
+         (branch (plist-get worktree :branch))
+         (name (agent-shell-dashboard--dir-name dir))
+         (start (point)))
+    (agent-shell-dashboard--insert (if last
+                                       agent-shell-dashboard--tree-last
+                                     agent-shell-dashboard--tree-branch)
+                                   'face 'agent-shell-dashboard-dim)
+    (when (plist-get worktree :linked)
+      (agent-shell-dashboard--insert
+       "[WT] " 'face (list 'agent-shell-dashboard-badge-wt
+                           (agent-shell-dashboard--mono))))
+    (agent-shell-dashboard--insert (or branch name)
+                                   'face 'agent-shell-dashboard-worktree)
+    ;; Only a linked worktree can have a directory name worth showing; a
+    ;; main one sits at the repo root, whose name the repo node already has.
+    (when (and branch (plist-get worktree :linked) (not (equal branch name)))
+      (agent-shell-dashboard--insert (format "  (%s)" name)
+                                     'face 'agent-shell-dashboard-dim))
+    ;; The main worktree sits at the repo root, whose path the repo node
+    ;; already shows; a linked one can live anywhere, so spell it out.
+    (unless (equal (directory-file-name dir) (directory-file-name repo))
+      (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-model))
+      (agent-shell-dashboard--insert
+       (agent-shell-dashboard--truncate-left
+        (abbreviate-file-name (directory-file-name dir))
+        agent-shell-dashboard-path-width)
+       'face 'agent-shell-dashboard-dim))
+    (insert "\n")
+    (add-text-properties start (point)
+                         (list 'agent-shell-dashboard-worktree-node worktree))))
+
+(defun agent-shell-dashboard--insert-tree (items dir-fn row-fn)
+  "Insert ITEMS as a <base repo> -> <worktree> -> <row> tree.
+DIR-FN returns an item's working directory; ROW-FN is called with the
+item and the tree prefix string its row must start with."
+  (let ((first t))
+    (dolist (repo-group (agent-shell-dashboard--group-tree items dir-fn))
+      (unless first (insert "\n"))
+      (setq first nil)
+      (let* ((repo (car repo-group))
+             (worktree-groups (cdr repo-group))
+             (remaining (length worktree-groups)))
+        (agent-shell-dashboard--insert-repo-node repo)
+        (dolist (worktree-group worktree-groups)
+          (setq remaining (1- remaining))
+          (let ((last (zerop remaining)))
+            (agent-shell-dashboard--insert-worktree-node
+             (car worktree-group) repo last)
+            (dolist (item (cdr worktree-group))
+              (funcall row-fn item (if last
+                                       agent-shell-dashboard--tree-blank
+                                     agent-shell-dashboard--tree-stem)))))))))
+
+(defun agent-shell-dashboard--insert-needs-you-row (buffer prefix)
+  "Insert BUFFER's triage row behind tree PREFIX, plus its sub-lines.
+The sub-lines are deliberately left without a row property so `TAB'
+navigation still steps session to session."
+  (agent-shell-dashboard--insert-session-row buffer prefix)
+  (let* ((msg (agent-shell-dashboard--last-agent-message buffer))
+         (hint (or (agent-shell-dashboard--decision-hint msg)
+                   (and (eq (agent-shell-dashboard--category buffer) 'waiting)
+                        "permission request")))
+         (excerpt (ignore-errors
+                    (funcall agent-shell-dashboard-excerpt-function buffer msg))))
+    (when hint
+      (agent-shell-dashboard--insert prefix 'face 'agent-shell-dashboard-dim)
+      (agent-shell-dashboard--insert (concat "  ↳ " hint "\n")
+                                     'face 'agent-shell-dashboard-attention))
+    (when excerpt
+      (agent-shell-dashboard--insert prefix 'face 'agent-shell-dashboard-dim)
+      (agent-shell-dashboard--insert (concat "  │ " excerpt "\n")
+                                     'face 'agent-shell-dashboard-quote))))
 
 (defun agent-shell-dashboard--insert-needs-you (buffers)
   "Insert the \"Needs you\" section for the needy subset of BUFFERS."
@@ -879,31 +1121,21 @@ font; a leading and trailing space keep glyph and label off the border."
     (if (null needy)
         (agent-shell-dashboard--insert
          "  Nothing waiting on you. \n" 'face 'agent-shell-dashboard-dim)
-      (dolist (b needy)
-        (agent-shell-dashboard--insert-session-row b)
-        (let* ((msg (agent-shell-dashboard--last-agent-message b))
-               (hint (or (agent-shell-dashboard--decision-hint msg)
-                         (and (eq (agent-shell-dashboard--category b) 'waiting)
-                              "permission request")))
-               (excerpt (ignore-errors
-                          (funcall agent-shell-dashboard-excerpt-function b msg))))
-          (when hint
-            (agent-shell-dashboard--insert (concat "    ↳ " hint "\n")
-                                           'face 'agent-shell-dashboard-attention))
-          (when excerpt
-            (agent-shell-dashboard--insert (concat "    │ " excerpt "\n")
-                                           'face 'agent-shell-dashboard-quote)))))))
+      (agent-shell-dashboard--insert-tree
+       needy #'agent-shell-dashboard--cwd
+       #'agent-shell-dashboard--insert-needs-you-row))))
 
 (defun agent-shell-dashboard--insert-sessions (buffers)
   "Insert the Sessions section listing all BUFFERS."
   (agent-shell-dashboard--insert-heading
-   "Sessions" 'agent-shell-dashboard-heading-sessions "— RET open · g refresh")
+   "Sessions" 'agent-shell-dashboard-heading-sessions
+   "— RET open · D delete worktree · g refresh")
   (if (null buffers)
       (agent-shell-dashboard--insert
        "  No agent-shell sessions. Press c to start one.\n"
        'face 'agent-shell-dashboard-dim)
-    (dolist (b buffers)
-      (agent-shell-dashboard--insert-session-row b))))
+    (agent-shell-dashboard--insert-tree buffers #'agent-shell-dashboard--cwd
+                                        #'agent-shell-dashboard--insert-session-row)))
 
 (defun agent-shell-dashboard--insert-action (spec)
   "Insert one `[key] label' cell for SPEC, a (KEY . LABEL) cons, padded."
@@ -924,6 +1156,7 @@ font; a leading and trailing space keep glyph and label off the border."
                  ("m" . "Set model")
                  ("r" . "Rename session at point")
                  ("K" . "Kill session at point")
+                 ("D" . "Delete worktree at point")
                  ("X" . "Close all"))))
     (while specs
       (agent-shell-dashboard--insert-action (pop specs))
@@ -1051,23 +1284,23 @@ Prefers `agent-shell-dashboard-session-name-function', then the plist's
         (and cwd (file-name-nondirectory (directory-file-name cwd))))
       "session"))
 
-(defun agent-shell-dashboard--insert-recent-session-row (session)
-  "Insert one Recent-sessions row for SESSION plist, propertized for RET.
-Columns: buffer name, working directory, and when the session was opened."
-  (let* ((name (agent-shell-dashboard--fit
-                (agent-shell-dashboard--session-label session) 34))
-         (cwd (agent-shell-dashboard--truncate-left
-               (abbreviate-file-name
-                (directory-file-name (or (plist-get session :cwd) "")))
-               agent-shell-dashboard-path-width))
+(defun agent-shell-dashboard--insert-recent-session-row (session prefix)
+  "Insert one Recent-sessions row for SESSION plist behind tree PREFIX.
+Columns: session name, the agent that ran it, and when it was opened —
+the working directory comes from the tree nodes above."
+  (let* ((name (agent-shell-dashboard--session-label session))
+         (agent (or (plist-get session :agent) "—"))
          (time (agent-shell-dashboard--relative-time
                 (or (plist-get session :opened) (plist-get session :time))))
          (start (point)))
     ;; Same absolute column stops as the session rows so both tables line up.
-    (agent-shell-dashboard--insert "  ↻ " 'face 'agent-shell-dashboard-key)
-    (agent-shell-dashboard--insert (agent-shell-dashboard--fit name 34) 'face 'default)
+    (agent-shell-dashboard--insert prefix 'face 'agent-shell-dashboard-dim)
+    (agent-shell-dashboard--insert " ↻ " 'face 'agent-shell-dashboard-key)
+    (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-name))
+    (agent-shell-dashboard--insert (agent-shell-dashboard--fit name 26) 'face 'default)
     (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-model))
-    (agent-shell-dashboard--insert cwd 'face 'agent-shell-dashboard-dim)
+    (agent-shell-dashboard--insert (agent-shell-dashboard--fit agent 30)
+                                   'face 'agent-shell-dashboard-model)
     (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-time))
     (agent-shell-dashboard--insert time 'face 'agent-shell-dashboard-dim)
     (insert "\n")
@@ -1081,8 +1314,10 @@ Columns: buffer name, working directory, and when the session was opened."
                           (funcall agent-shell-dashboard-recent-sessions-function))))
     (agent-shell-dashboard--insert-heading
      "Recent sessions" 'agent-shell-dashboard-heading-projects "— RET reopens")
-    (dolist (s sessions)
-      (agent-shell-dashboard--insert-recent-session-row s))))
+    (agent-shell-dashboard--insert-tree
+     sessions
+     (lambda (s) (or (plist-get s :cwd) default-directory))
+     #'agent-shell-dashboard--insert-recent-session-row)))
 
 (defun agent-shell-dashboard--insert-banner ()
   "Insert the ASCII banner and heartbeat subtitle."
@@ -1165,33 +1400,53 @@ Assumes the buffer is current and writable."
   (let ((buf (get-buffer agent-shell-dashboard-buffer-name)))
     (and (buffer-live-p buf) buf)))
 
+(defun agent-shell-dashboard--goto-row (predicate)
+  "Put point at the start of the first line satisfying PREDICATE.
+PREDICATE is called with the line's beginning position.  Returns point
+when a line matched, else nil."
+  (let (found)
+    (goto-char (point-min))
+    (while (and (not found) (not (eobp)))
+      (if (funcall predicate (line-beginning-position))
+          (setq found (goto-char (line-beginning-position)))
+        (forward-line 1)))
+    found))
+
 (defun agent-shell-dashboard--goto-buffer-row (buffer)
   "Put point on the row whose live session is BUFFER.  Return non-nil if found.
 Restores position by session identity (robust to re-sorting), unlike a
 raw line number."
   (when (buffer-live-p buffer)
-    (let (found)
-      (goto-char (point-min))
-      (while (and (not found) (not (eobp)))
-        (if (eq (get-text-property (line-beginning-position)
-                                   'agent-shell-dashboard-buffer)
-                buffer)
-            (setq found (goto-char (line-beginning-position)))
-          (forward-line 1)))
-      found)))
+    (agent-shell-dashboard--goto-row
+     (lambda (pos)
+       (eq (get-text-property pos 'agent-shell-dashboard-buffer) buffer)))))
+
+(defun agent-shell-dashboard--goto-worktree-row (dir)
+  "Put point on the worktree node row for DIR.  Return non-nil if found."
+  (agent-shell-dashboard--goto-row
+   (lambda (pos)
+     (equal (plist-get (get-text-property pos 'agent-shell-dashboard-worktree-node)
+                       :dir)
+            dir))))
 
 (defun agent-shell-dashboard--point-snapshot (pos)
   "Return a restore snapshot for buffer position POS.
-Records the session row there (by buffer identity, which survives
-re-sorting) and its line number as a fallback."
-  (list :target (get-text-property (min pos (point-max))
-                                   'agent-shell-dashboard-buffer)
-        :line (line-number-at-pos pos)))
+Records the row there by identity — the session buffer, or the worktree
+directory for a tree node — both of which survive re-sorting, plus the
+line number as a fallback."
+  (let ((pos (min pos (point-max))))
+    (list :target (get-text-property pos 'agent-shell-dashboard-buffer)
+          :worktree (plist-get (get-text-property
+                                pos 'agent-shell-dashboard-worktree-node)
+                               :dir)
+          :line (line-number-at-pos pos))))
 
 (defun agent-shell-dashboard--restore-point (snapshot)
   "Move point to SNAPSHOT's row (by identity) or its line, and return point."
   (or (when-let* ((target (plist-get snapshot :target)))
         (agent-shell-dashboard--goto-buffer-row target))
+      (when-let* ((dir (plist-get snapshot :worktree)))
+        (agent-shell-dashboard--goto-worktree-row dir))
       (progn (goto-char (point-min))
              (forward-line (1- (plist-get snapshot :line)))
              (point))))
@@ -1337,34 +1592,67 @@ file does not stack anything."
   "Return the recent-session plist described by the row at point, or nil."
   (get-text-property (point) 'agent-shell-dashboard-session))
 
+(defun agent-shell-dashboard--worktree-node-at-point ()
+  "Return the worktree plist of the tree node at point, or nil."
+  (get-text-property (point) 'agent-shell-dashboard-worktree-node))
+
+(defun agent-shell-dashboard--worktree-at-point ()
+  "Return the worktree plist the row at point belongs to, or nil.
+A worktree node carries it outright; a session row resolves it from that
+session's working directory, so worktree actions work from either."
+  (or (agent-shell-dashboard--worktree-node-at-point)
+      (when-let* ((buf (agent-shell-dashboard--buffer-at-point))
+                  ((buffer-live-p buf)))
+        (agent-shell-dashboard--worktree-plist
+         (agent-shell-dashboard--cwd buf)))
+      (when-let* ((session (agent-shell-dashboard--session-at-point))
+                  (cwd (plist-get session :cwd)))
+        (agent-shell-dashboard--worktree-plist cwd))))
+
 (defun agent-shell-dashboard--row-at-point-p (&optional pos)
   "Return non-nil when POS (or point) is on a navigable row.
-Navigable rows are live-session rows (`agent-shell-dashboard-buffer')
-and recent-session rows (`agent-shell-dashboard-session')."
+Navigable rows are live-session rows (`agent-shell-dashboard-buffer'),
+recent-session rows (`agent-shell-dashboard-session') and worktree nodes
+\(`agent-shell-dashboard-worktree-node')."
   (let ((p (or pos (point))))
     (or (get-text-property p 'agent-shell-dashboard-buffer)
-        (get-text-property p 'agent-shell-dashboard-session))))
+        (get-text-property p 'agent-shell-dashboard-session)
+        (get-text-property p 'agent-shell-dashboard-worktree-node))))
 
 (defun agent-shell-dashboard-open ()
   "Open or reopen the session on the row at point.
 A live-session row is switched to; a recent-session row is resumed via
-`agent-shell-dashboard-resume-recent-function'."
+`agent-shell-dashboard-resume-recent-function'; a worktree node opens
+its most recently active session."
   (interactive)
   (let ((buf (agent-shell-dashboard--buffer-at-point))
-        (session (agent-shell-dashboard--session-at-point)))
+        (session (agent-shell-dashboard--session-at-point))
+        (worktree (agent-shell-dashboard--worktree-node-at-point)))
     (cond
      (buf (if (buffer-live-p buf)
               (pop-to-buffer buf)
             (user-error "That session's buffer is gone — press g to refresh")))
      (session (funcall agent-shell-dashboard-resume-recent-function session))
+     (worktree
+      (let* ((dir (plist-get worktree :dir))
+             (buffers (agent-shell-dashboard--sorted-buffers
+                       (agent-shell-dashboard--buffers-under dir))))
+        (if buffers
+            (pop-to-buffer (car buffers))
+          (user-error "No live session in %s"
+                      (abbreviate-file-name (directory-file-name dir))))))
      (t (user-error "Point is not on a session row")))))
 
 (defun agent-shell-dashboard--goto-first-row ()
-  "Move point to the first navigable row, if any."
+  "Move point to the first session row, else the first navigable row.
+Worktree nodes are navigable too, but a session is the more useful
+place to land when the dashboard first opens."
   (goto-char (point-min))
-  (while (and (not (eobp))
-              (not (agent-shell-dashboard--row-at-point-p (line-beginning-position))))
-    (forward-line 1)))
+  (or (agent-shell-dashboard--goto-row
+       (lambda (pos)
+         (or (get-text-property pos 'agent-shell-dashboard-buffer)
+             (get-text-property pos 'agent-shell-dashboard-session))))
+      (agent-shell-dashboard--goto-row #'agent-shell-dashboard--row-at-point-p)))
 
 (defun agent-shell-dashboard-next-row ()
   "Move point to the next navigable row."
@@ -1522,6 +1810,56 @@ Delegates to `agent-shell-dashboard-close-all-function'."
         (agent-shell-dashboard-refresh))
     (user-error "Point is not on a session row")))
 
+(defun agent-shell-dashboard--delete-worktree-default (worktree)
+  "Delete WORKTREE from disk after killing every session inside it.
+Default for `agent-shell-dashboard-delete-worktree-function'.  Refuses
+on a main worktree — only linked ones can be removed — and runs `git
+worktree remove --force\', so uncommitted changes in the worktree are
+discarded.  The branch it had checked out is left alone."
+  (let* ((dir (directory-file-name (plist-get worktree :dir)))
+         (repo (expand-file-name (plist-get worktree :repo)))
+         (buffers (agent-shell-dashboard--buffers-under dir))
+         (pretty (abbreviate-file-name dir)))
+    (unless (plist-get worktree :linked)
+      (user-error "%s is a main worktree, not a linked one" pretty))
+    (unless (executable-find "git")
+      (user-error "Cannot remove a worktree without `git\' on PATH"))
+    (when (yes-or-no-p
+           (if buffers
+               (format "Delete worktree %s and kill its %d session(s)? "
+                       pretty (length buffers))
+             (format "Delete worktree %s? " pretty)))
+      ;; Kill the sessions first: their agent processes run *inside* the
+      ;; directory git is about to remove.
+      (let ((kill-buffer-query-functions nil))
+        (dolist (b buffers) (when (buffer-live-p b) (kill-buffer b))))
+      (with-temp-buffer
+        (unless (zerop (process-file "git" nil t nil "-C" repo
+                                     "worktree" "remove" "--force" dir))
+          (user-error "git worktree remove failed: %s"
+                      (string-trim (buffer-string)))))
+      (message "Deleted worktree %s%s" pretty
+               (if buffers
+                   (format " (%d session(s) killed)" (length buffers))
+                 "")))))
+
+(defun agent-shell-dashboard-delete-worktree-at-point ()
+  "Delete the git worktree the row at point belongs to.
+Every agent-shell session inside the worktree is killed first.  Works
+from a worktree node and from any session row below it.  Delegates to
+`agent-shell-dashboard-delete-worktree-function', then refreshes."
+  (interactive)
+  (let ((worktree (agent-shell-dashboard--worktree-at-point)))
+    (cond
+     ((null worktree)
+      (user-error "Point is not on a worktree or session row"))
+     ((null agent-shell-dashboard-delete-worktree-function)
+      (message "Unconfigured — set `%s' to a command to enable this action"
+               'agent-shell-dashboard-delete-worktree-function))
+     (t
+      (funcall agent-shell-dashboard-delete-worktree-function worktree)
+      (agent-shell-dashboard-refresh)))))
+
 (defun agent-shell-dashboard-fork-at-point ()
   "Fork the agent-shell session on the row at point into a new shell.
 Delegates to `agent-shell-dashboard-fork-session-function', run with the
@@ -1552,8 +1890,9 @@ live buffer.  Refreshes afterwards so the reopened session appears."
   (with-help-window "*agent-shell-dashboard help*"
     (princ "agent-shell-dashboard — keybindings\n")
     (princ "===================================\n\n")
+    (princ "Sessions are grouped: <base repo> -> <worktree> -> <session>.\n\n")
     (princ "Navigation\n")
-    (princ "  TAB / S-TAB   Next / previous session row\n")
+    (princ "  TAB / S-TAB   Next / previous row (sessions and worktree nodes)\n")
     (princ "  RET / o       Open live session / reopen recent session at point\n\n")
     (princ "Sessions\n")
     (princ "  c   New session\n")
@@ -1564,6 +1903,8 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     (princ "  r   Rename session at point\n")
     (princ "  K   Kill session at point\n")
     (princ "  X   Close all sessions\n\n")
+    (princ "Worktrees\n")
+    (princ "  D   Delete the worktree at point (kills its sessions first)\n\n")
     (princ "Insight\n")
     (princ "  a   Conclusions report (async summary of every session)\n\n")
     (princ "Misc\n")
@@ -1587,6 +1928,7 @@ live buffer.  Refreshes afterwards so the reopened session appears."
   "m"         #'agent-shell-dashboard-set-model
   "r"         #'agent-shell-dashboard-rename-at-point
   "K"         #'agent-shell-dashboard-kill-at-point
+  "D"         #'agent-shell-dashboard-delete-worktree-at-point
   "X"         #'agent-shell-dashboard-close-all
   "g"         #'agent-shell-dashboard-refresh
   "?"         #'agent-shell-dashboard-help
@@ -1622,6 +1964,7 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     "m" #'agent-shell-dashboard-set-model
     "r" #'agent-shell-dashboard-rename-at-point
     "K" #'agent-shell-dashboard-kill-at-point
+    "D" #'agent-shell-dashboard-delete-worktree-at-point
     "X" #'agent-shell-dashboard-close-all
     "g" #'agent-shell-dashboard-refresh
     "?" #'agent-shell-dashboard-help
@@ -1673,7 +2016,9 @@ Suitable as an `initial-buffer-choice'."
     agent-shell-dashboard-badge-waiting
     agent-shell-dashboard-badge-ready
     agent-shell-dashboard-badge-killed
-    agent-shell-dashboard-badge-wt)
+    agent-shell-dashboard-badge-wt
+    agent-shell-dashboard-repo
+    agent-shell-dashboard-worktree)
   "All dashboard faces the theme layer may recolor.")
 
 (defun agent-shell-dashboard--modus-active-p ()
@@ -1732,7 +2077,9 @@ the reset path."
                        :box (:line-width (1 . -1) :color ,red) :weight bold)
                       (agent-shell-dashboard-badge-wt
                        :foreground ,cyan-cooler :background ,bg-cyan-subtle
-                       :box (:line-width (1 . -1) :color ,cyan-cooler) :weight bold)))
+                       :box (:line-width (1 . -1) :color ,cyan-cooler) :weight bold)
+                      (agent-shell-dashboard-repo :foreground ,fg-main :weight bold)
+                      (agent-shell-dashboard-worktree :foreground ,cyan-cooler)))
           (face-spec-set (car fs) `((t ,@(cdr fs)))))))))
 
 (add-hook 'enable-theme-functions #'agent-shell-dashboard--apply-theme-faces)
