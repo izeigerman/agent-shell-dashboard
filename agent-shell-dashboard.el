@@ -182,7 +182,7 @@ remapped to a proportional font."
 ;; richer commands (e.g. a manager that prompts for a directory + name).
 
 (defcustom agent-shell-dashboard-new-session-function #'agent-shell-new-shell
-  "Command invoked by `c' to start a new session."
+  "Command invoked by `n' to start a new session."
   :type '(choice function (const :tag "Unconfigured" nil)))
 
 (defcustom agent-shell-dashboard-new-worktree-function #'agent-shell-new-worktree-shell
@@ -1132,7 +1132,7 @@ navigation still steps session to session."
    "— RET open · D delete worktree · g refresh")
   (if (null buffers)
       (agent-shell-dashboard--insert
-       "  No agent-shell sessions. Press c to start one.\n"
+       "  No agent-shell sessions. Press n to start one.\n"
        'face 'agent-shell-dashboard-dim)
     (agent-shell-dashboard--insert-tree buffers #'agent-shell-dashboard--cwd
                                         #'agent-shell-dashboard--insert-session-row)))
@@ -1148,7 +1148,7 @@ navigation still steps session to session."
   "Insert the Quick actions keybinding menu in two columns."
   (agent-shell-dashboard--insert-heading
    "Quick actions" 'agent-shell-dashboard-heading-actions)
-  (let ((specs '(("c" . "New session")
+  (let ((specs '(("n" . "New session")
                  ("w" . "New worktree session")
                  ("R" . "Reopen a previous session")
                  ("f" . "Fork session at point")
@@ -1895,7 +1895,7 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     (princ "  TAB / S-TAB   Next / previous row (sessions and worktree nodes)\n")
     (princ "  RET / o       Open live session / reopen recent session at point\n\n")
     (princ "Sessions\n")
-    (princ "  c   New session\n")
+    (princ "  n   New session\n")
     (princ "  w   New worktree session\n")
     (princ "  R   Reopen a previous (closed) session\n")
     (princ "  f   Fork session at point into a new shell\n")
@@ -1920,7 +1920,7 @@ live buffer.  Refreshes afterwards so the reopened session appears."
   "<backtab>" #'agent-shell-dashboard-prev-row
   "RET"       #'agent-shell-dashboard-open
   "o"         #'agent-shell-dashboard-open
-  "c"         #'agent-shell-dashboard-new-session
+  "n"         #'agent-shell-dashboard-new-session
   "w"         #'agent-shell-dashboard-new-worktree
   "R"         #'agent-shell-dashboard-resume-session
   "f"         #'agent-shell-dashboard-fork-at-point
@@ -1956,7 +1956,7 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     (kbd "<backtab>") #'agent-shell-dashboard-prev-row
     (kbd "RET")       #'agent-shell-dashboard-open
     "o" #'agent-shell-dashboard-open
-    "c" #'agent-shell-dashboard-new-session
+    "n" #'agent-shell-dashboard-new-session
     "w" #'agent-shell-dashboard-new-worktree
     "R" #'agent-shell-dashboard-resume-session
     "f" #'agent-shell-dashboard-fork-at-point
