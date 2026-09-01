@@ -36,6 +36,11 @@ Linked worktrees are tagged `[WT]` and labelled by the branch they have checked
 out (with the directory name alongside when it differs). Worktree nodes are
 rows too: `TAB` stops on them, `RET` opens their most recent session.
 
+The row at point also decides where new sessions land: **`n` starts a session in
+the worktree at point** and **`w` cuts the new worktree from the repository at
+point**. With point off any row, both fall back to the dashboard buffer's own
+directory.
+
 **`D` deletes the worktree at point** — from the worktree node or from any
 session row inside it. It kills every agent-shell session in the worktree
 first, then runs `git worktree remove --force`, so uncommitted changes go with
