@@ -1132,7 +1132,7 @@ navigation still steps session to session."
    "— RET open · D delete worktree · g refresh")
   (if (null buffers)
       (agent-shell-dashboard--insert
-       "  No agent-shell sessions. Press c to start one.\n"
+       "  No agent-shell sessions. Press n to start one.\n"
        'face 'agent-shell-dashboard-dim)
     (agent-shell-dashboard--insert-tree buffers #'agent-shell-dashboard--cwd
                                         #'agent-shell-dashboard--insert-session-row)))
