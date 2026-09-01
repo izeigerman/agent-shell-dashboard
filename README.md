@@ -113,7 +113,7 @@ Then `doom sync` and restart. Bind it if you like: `(map! :leader "d" #'agent-sh
 |-----|--------|-----|--------|
 | `RET` / `o` | Open (live) / reopen (recent) session | `R` | Reopen a previous session |
 | `TAB` / `S-TAB` | Next / prev row | `f` | Fork session at point |
-| `c` | New session | `m` | Set model at point |
+| `n` | New session | `m` | Set model at point |
 | `w` | New worktree session | `r` | Rename session at point |
 | `a` | Conclusions report (async) | `K` | Kill session at point |
 | `g` | Refresh | `D` | Delete worktree at point |
