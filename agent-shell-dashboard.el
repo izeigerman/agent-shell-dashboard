@@ -33,7 +33,9 @@
 ;; Both session tables are grouped into a <base repo> -> <worktree> ->
 ;; <session> tree, so a session row never repeats its working directory —
 ;; the repo and worktree nodes above it carry that.  `D' on any row deletes
-;; that row's git worktree, killing every session inside it first.
+;; that row's git worktree, killing every session inside it first.  The tree
+;; also sets the context for creating sessions: `n' starts one in the worktree
+;; at point and `w' cuts the new worktree from the repository at point.
 ;;
 ;; All state is read from `agent-shell' *core* only (`agent-shell-buffers',
 ;; `agent-shell-status', `agent-shell-get-model-name', the buffer's
@@ -1609,6 +1611,19 @@ session's working directory, so worktree actions work from either."
                   (cwd (plist-get session :cwd)))
         (agent-shell-dashboard--worktree-plist cwd))))
 
+(defun agent-shell-dashboard--context-directory (&optional repo)
+  "Return the directory the row at point belongs to, or nil.
+That is the row's worktree root, or with REPO non-nil the main
+repository that worktree belongs to.  Session-creating actions bind
+`default-directory' to it so a new session lands where the dashboard is
+focused rather than in the dashboard buffer's own directory.  Returns
+nil when point is not on a row, or when the directory is gone (as with
+a resumable session whose worktree was deleted)."
+  (when-let* ((worktree (agent-shell-dashboard--worktree-at-point))
+              (dir (plist-get worktree (if repo :repo :dir)))
+              ((file-directory-p dir)))
+    dir))
+
 (defun agent-shell-dashboard--row-at-point-p (&optional pos)
   "Return non-nil when POS (or point) is on a navigable row.
 Navigable rows are live-session rows (`agent-shell-dashboard-buffer'),
@@ -1705,18 +1720,28 @@ Built-in default for `agent-shell-dashboard-close-all-function'."
         (message "Closed %d session(s)" (length buffers))))))
 
 (defun agent-shell-dashboard-new-session ()
-  "Start a new agent-shell session.
-Delegates to `agent-shell-dashboard-new-session-function'."
+  "Start a new agent-shell session in the worktree at point.
+Delegates to `agent-shell-dashboard-new-session-function', called with
+`default-directory' bound to the worktree of the row at point — so the
+session is created where the dashboard is focused — falling back to this
+buffer's own directory when point is not on a row."
   (interactive)
-  (agent-shell-dashboard--invoke agent-shell-dashboard-new-session-function
-                                 'agent-shell-dashboard-new-session-function))
+  (let ((default-directory (or (agent-shell-dashboard--context-directory)
+                               default-directory)))
+    (agent-shell-dashboard--invoke agent-shell-dashboard-new-session-function
+                                   'agent-shell-dashboard-new-session-function)))
 
 (defun agent-shell-dashboard-new-worktree ()
   "Start a new agent-shell session in a git worktree.
-Delegates to `agent-shell-dashboard-new-worktree-function'."
+Delegates to `agent-shell-dashboard-new-worktree-function', called with
+`default-directory' bound to the main repository of the row at point, so
+the new worktree is cut from the repository the dashboard is focused on.
+Falls back to this buffer's own directory when point is not on a row."
   (interactive)
-  (agent-shell-dashboard--invoke agent-shell-dashboard-new-worktree-function
-                                 'agent-shell-dashboard-new-worktree-function))
+  (let ((default-directory (or (agent-shell-dashboard--context-directory t)
+                               default-directory)))
+    (agent-shell-dashboard--invoke agent-shell-dashboard-new-worktree-function
+                                   'agent-shell-dashboard-new-worktree-function)))
 
 (defun agent-shell-dashboard-conclusions ()
   "Summarise every session's conclusion.
