@@ -38,7 +38,8 @@ rows too: `TAB` stops on them, `RET` opens their most recent session.
 
 The row at point also decides where new sessions land: **`n` starts a session in
 the worktree at point** and **`w` cuts the new worktree from the repository at
-point**. With point off any row, both fall back to the dashboard buffer's own
+point**. Repo nodes count too — both act on that repository from its header
+row. With point off any row, both fall back to the dashboard buffer's own
 directory.
 
 **`D` deletes the worktree at point** — from the worktree node or from any
