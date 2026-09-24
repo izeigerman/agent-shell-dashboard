@@ -1019,17 +1019,23 @@ above the row carry it."
 (defconst agent-shell-dashboard--tree-blank "       " "Row prefix under the final worktree.")
 
 (defun agent-shell-dashboard--insert-repo-node (repo)
-  "Insert the base-repository node row for REPO's root directory."
-  (agent-shell-dashboard--insert " ▾ " 'face 'agent-shell-dashboard-dim)
-  (agent-shell-dashboard--insert (agent-shell-dashboard--dir-name repo)
-                                 'face 'agent-shell-dashboard-repo)
-  (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-model))
-  (agent-shell-dashboard--insert
-   (agent-shell-dashboard--truncate-left
-    (abbreviate-file-name (directory-file-name repo))
-    agent-shell-dashboard-path-width)
-   'face 'agent-shell-dashboard-dim)
-  (insert "\n"))
+  "Insert the base-repository node row for REPO's root directory.
+The row carries REPO so `n' and `w' have a context directory here too.
+It stays out of `agent-shell-dashboard--row-at-point-p': `TAB' keeps
+stepping through worktrees and sessions only."
+  (let ((start (point)))
+    (agent-shell-dashboard--insert " ▾ " 'face 'agent-shell-dashboard-dim)
+    (agent-shell-dashboard--insert (agent-shell-dashboard--dir-name repo)
+                                   'face 'agent-shell-dashboard-repo)
+    (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-model))
+    (agent-shell-dashboard--insert
+     (agent-shell-dashboard--truncate-left
+      (abbreviate-file-name (directory-file-name repo))
+      agent-shell-dashboard-path-width)
+     'face 'agent-shell-dashboard-dim)
+    (insert "\n")
+    (add-text-properties start (point)
+                         (list 'agent-shell-dashboard-repo-node repo))))
 
 (defun agent-shell-dashboard--insert-worktree-node (dir repo last)
   "Insert the worktree node row for DIR under REPO.
@@ -1614,13 +1620,16 @@ session's working directory, so worktree actions work from either."
 (defun agent-shell-dashboard--context-directory (&optional repo)
   "Return the directory the row at point belongs to, or nil.
 That is the row's worktree root, or with REPO non-nil the main
-repository that worktree belongs to.  Session-creating actions bind
-`default-directory' to it so a new session lands where the dashboard is
-focused rather than in the dashboard buffer's own directory.  Returns
-nil when point is not on a row, or when the directory is gone (as with
-a resumable session whose worktree was deleted)."
-  (when-let* ((worktree (agent-shell-dashboard--worktree-at-point))
-              (dir (plist-get worktree (if repo :repo :dir)))
+repository that worktree belongs to.  A repo node has no worktree of its
+own, so it answers with its repository root either way.  Session-creating
+actions bind `default-directory' to it so a new session lands where the
+dashboard is focused rather than in the dashboard buffer's own
+directory.  Returns nil when point is not on a row, or when the
+directory is gone (as with a resumable session whose worktree was
+deleted)."
+  (when-let* ((dir (or (when-let* ((worktree (agent-shell-dashboard--worktree-at-point)))
+                         (plist-get worktree (if repo :repo :dir)))
+                       (get-text-property (point) 'agent-shell-dashboard-repo-node)))
               ((file-directory-p dir)))
     dir))
 
