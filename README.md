@@ -4,7 +4,7 @@ A landing page for [`agent-shell`](https://github.com/xenodium/agent-shell) —
 one read-only buffer that shows every agent session at a glance, in the spirit
 of doom-dashboard.
 
-<img width="771" height="928" alt="Screenshot 2026-07-10 at 09 21 14" src="https://github.com/user-attachments/assets/e824dabf-3b2b-4564-9478-244284d23aa0" />
+<img width="846" alt="agent-shell-dashboard buffer" src="images/dashboard.png" />
 
 
 ## Sections
@@ -115,15 +115,15 @@ Then `doom sync` and restart. Bind it if you like: `(map! :leader "d" #'agent-sh
 
 ## Keybindings
 
-| Key | Action | Key | Action |
-|-----|--------|-----|--------|
-| `RET` / `o` | Open (live) / reopen (recent) session | `R` | Reopen a previous session |
-| `TAB` / `S-TAB` | Next / prev row | `f` | Fork session at point |
-| `n` | New session | `m` | Set model at point |
-| `w` | New worktree session | `r` | Rename session at point |
-| `a` | Conclusions report (async) | `K` | Kill session at point |
-| `g` | Refresh | `D` | Delete worktree at point |
-| `q` / `?` | Quit / Help | `X` | Close all |
+| Key             | Action                                | Key | Action                    |
+|-----------------|---------------------------------------|-----|---------------------------|
+| `RET` / `o`     | Open (live) / reopen (recent) session | `R` | Reopen a previous session |
+| `TAB` / `S-TAB` | Next / prev row                       | `f` | Fork session at point     |
+| `n`             | New session                           | `m` | Set model at point        |
+| `w`             | New worktree session                  | `r` | Rename session at point   |
+| `a`             | Conclusions report (async)            | `K` | Kill session at point     |
+| `g`             | Refresh                               | `D` | Delete worktree at point  |
+| `q` / `?`       | Quit / Help                           | `X` | Close all                 |
 
 Every action delegates to a configurable `agent-shell-dashboard-*-function`, so
 you can wire keys to your own commands without editing the package.
